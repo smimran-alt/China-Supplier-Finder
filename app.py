@@ -1,125 +1,148 @@
 import csv
 import io
-import os
 import re
 import time
-from urllib.parse import urlparse
+from collections import deque
+from urllib.parse import urljoin, urlparse, urldefrag
+from urllib.robotparser import RobotFileParser
 
 import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="China Supplier Finder", page_icon="🔎", layout="wide")
-st.title("China Supplier Finder")
-st.caption("Find public supplier leads for any product. Results are not verified businesses.")
+st.title("China Supplier Finder — Direct Crawler")
+st.caption("No search API key. Crawl permitted public pages starting from URLs you provide.")
 
-SITES = {
-    "Alibaba": "alibaba.com",
-    "Made-in-China": "made-in-china.com",
-    "Global Sources": "globalsources.com",
-    "1688": "1688.com",
-    "Independent websites": "",
+AGENT = "ChinaSupplierFinder/3.0 (+research crawler; respects robots.txt)"
+SESSION = requests.Session()
+SESSION.headers.update({"User-Agent": AGENT, "Accept-Language": "en,zh-CN;q=0.8"})
+CATEGORY_TERMS = {
+    "Manufacturer": ["manufacturer", "factory", "oem", "odm", "制造商", "工厂", "厂家", "生产"],
+    "Wholesaler": ["wholesale", "distributor", "bulk", "批发", "经销"],
+    "Sourcing agent": ["sourcing agent", "procurement", "trading company", "采购代理", "贸易公司"],
 }
-CATEGORIES = {
-    "Manufacturers": ["manufacturer", "厂家"],
-    "Wholesalers": ["wholesale supplier", "批发"],
-    "Sourcing agents": ["sourcing agent", "采购代理"],
-}
+ROBOTS = {}
 
-def clean(value):
-    return re.sub(r"\s+", " ", BeautifulSoup(value or "", "html.parser").get_text(" ", strip=True)).strip()
+def allowed(url):
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    if origin not in ROBOTS:
+        robot = RobotFileParser()
+        robot.set_url(origin + "/robots.txt")
+        try:
+            response = SESSION.get(origin + "/robots.txt", timeout=8)
+            if response.status_code == 200:
+                robot.parse(response.text.splitlines())
+                ROBOTS[origin] = robot
+            elif response.status_code in (401, 403, 429) or response.status_code >= 500:
+                ROBOTS[origin] = False
+            else:
+                ROBOTS[origin] = True
+        except requests.RequestException:
+            ROBOTS[origin] = False
+    policy = ROBOTS[origin]
+    return policy.can_fetch(AGENT, url) if isinstance(policy, RobotFileParser) else policy
 
-def api_key():
-    try:
-        return os.getenv("BRAVE_SEARCH_API_KEY") or st.secrets.get("BRAVE_SEARCH_API_KEY", "")
-    except (FileNotFoundError, KeyError):
-        return os.getenv("BRAVE_SEARCH_API_KEY", "")
+def crawl(seed_urls, product, chinese, depth, max_pages, delay):
+    queue = deque()
+    seeds = set()
+    for raw in seed_urls.splitlines():
+        url = raw.strip()
+        if not url:
+            continue
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            continue
+        seeds.add(parsed.netloc.lower())
+        queue.append((url, 0))
+    visited, rows, errors = set(), [], []
+    product_terms = [t.lower() for t in (product.strip(), chinese.strip()) if t.strip()]
+    while queue and len(visited) < max_pages:
+        url, level = queue.popleft()
+        url = urldefrag(url)[0]
+        if url in visited:
+            continue
+        parsed = urlparse(url)
+        if parsed.netloc.lower() not in seeds:
+            continue
+        visited.add(url)
+        if not allowed(url):
+            errors.append(f"Blocked by robots policy or unavailable robots.txt: {url}")
+            continue
+        try:
+            response = SESSION.get(url, timeout=15, allow_redirects=True)
+            response.raise_for_status()
+            if urlparse(response.url).netloc.lower() not in seeds:
+                continue
+            if "text/html" not in response.headers.get("Content-Type", ""):
+                continue
+            soup = BeautifulSoup(response.text[:1_500_000], "html.parser")
+            for node in soup(["script", "style", "nav", "footer"]):
+                node.decompose()
+            title = soup.title.get_text(" ", strip=True) if soup.title else ""
+            body = soup.get_text(" ", strip=True)[:12000]
+            content = (title + " " + body).lower()
+            matched_product = any(term in content for term in product_terms)
+            types = [label for label, terms in CATEGORY_TERMS.items() if any(t in content for t in terms)]
+            if matched_product:
+                rows.append({
+                    "product": product,
+                    "page_title": title[:250],
+                    "possible_business_types": ", ".join(types) or "Unclassified",
+                    "website": urlparse(response.url).netloc,
+                    "source_url": response.url,
+                    "excerpt": body[:450],
+                    "verification": "Unverified lead",
+                })
+            if level < depth:
+                for link in soup.select("a[href]"):
+                    next_url = urldefrag(urljoin(response.url, link.get("href", "")))[0]
+                    p = urlparse(next_url)
+                    if p.scheme in ("http", "https") and p.netloc.lower() in seeds and next_url not in visited:
+                        if not re.search(r"\.(pdf|jpg|jpeg|png|gif|zip|exe)(\?|$)", p.path, re.I):
+                            queue.append((next_url, level + 1))
+        except requests.RequestException as exc:
+            errors.append(f"{url}: {exc}")
+        time.sleep(delay)
+    return rows, errors, len(visited)
 
-def search(query, limit):
-    key = api_key()
-    if not key:
-        raise RuntimeError("BRAVE_SEARCH_API_KEY is missing. Configure it in Streamlit secrets.")
-    response = requests.get(
-        "https://api.search.brave.com/res/v1/web/search",
-        headers={"X-Subscription-Token": key, "Accept": "application/json"},
-        params={"q": query, "count": min(limit, 20)},
-        timeout=25,
-    )
-    response.raise_for_status()
-    return [
-        {"url": item.get("url"), "name": item.get("title"), "snippet": item.get("description")}
-        for item in response.json().get("web", {}).get("results", [])
-    ]
-
-def collect(product, chinese, categories, sites, limit):
-    rows, seen, errors = [], set(), []
-    for category in categories:
-        for site in sites:
-            for keyword in CATEGORIES[category]:
-                term = chinese if re.search(r"[\u3400-\u9fff]", keyword) and chinese else product
-                domain = SITES[site]
-                query = f"{term} {keyword} China" + (f" site:{domain}" if domain else "")
-                try:
-                    hits = search(query, limit)
-                except (requests.RequestException, RuntimeError, ValueError) as exc:
-                    errors.append(f"{site} / {category}: {exc}")
-                    continue
-                for hit in hits:
-                    url = hit.get("url", "")
-                    parsed = urlparse(url)
-                    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-                        continue
-                    normalized = url.rstrip("/").lower()
-                    if normalized in seen:
-                        continue
-                    seen.add(normalized)
-                    rows.append({
-                        "product": product,
-                        "category_searched": category,
-                        "platform": site,
-                        "listing_title": clean(hit.get("name", "")),
-                        "website_domain": parsed.netloc,
-                        "source_url": url,
-                        "description": clean(hit.get("snippet", "")),
-                        "search_query": query,
-                        "verification": "Not verified",
-                    })
-                time.sleep(0.15)
-    return rows, errors
-
-with st.form("supplier_search"):
-    a, b = st.columns(2)
-    product = a.text_input("Product (English)", "perfume")
-    chinese = b.text_input("Chinese translation (optional)", "香水")
-    categories = st.multiselect("Business types", list(CATEGORIES), default=list(CATEGORIES))
-    sites = st.multiselect("Sources", list(SITES), default=list(SITES))
-    limit = st.slider("Results per query", 5, 20, 10)
-    submitted = st.form_submit_button("Find suppliers", type="primary")
+with st.form("crawler"):
+    product = st.text_input("Product in English", "perfume")
+    chinese = st.text_input("Product in Chinese (optional)", "香水")
+    seeds = st.text_area("Starting website URLs (one per line)", placeholder="https://example-supplier-directory.com/category/perfume", height=120)
+    c1, c2, c3 = st.columns(3)
+    depth = c1.slider("Link depth", 0, 3, 1)
+    max_pages = c2.slider("Maximum pages", 5, 100, 25, 5)
+    delay = c3.slider("Delay between requests (seconds)", 1.0, 5.0, 2.0, 0.5)
+    submitted = st.form_submit_button("Start direct crawl", type="primary")
 
 if submitted:
-    if not product.strip() or not categories or not sites:
-        st.error("Enter a product and select at least one business type and source.")
+    if not product.strip() or not seeds.strip():
+        st.error("Enter a product and at least one public website URL.")
     else:
-        with st.spinner("Searching public indexed pages..."):
-            rows, errors = collect(product.strip(), chinese.strip(), categories, sites, limit)
-        st.session_state["rows"] = rows
-        st.session_state["errors"] = errors
+        with st.spinner("Crawling allowed pages..."):
+            rows, errors, visited = crawl(seeds, product, chinese, depth, max_pages, delay)
+        st.session_state["results"] = (rows, errors, visited)
 
-if "rows" in st.session_state:
-    rows = st.session_state["rows"]
-    st.metric("Unique listing URLs", len(rows))
+if "results" in st.session_state:
+    rows, errors, visited = st.session_state["results"]
+    st.metric("Pages checked", visited)
+    st.metric("Product-matching pages", len(rows))
     if rows:
         st.dataframe(rows, use_container_width=True, hide_index=True)
         buffer = io.StringIO()
         writer = csv.DictWriter(buffer, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
-        st.download_button("Download CSV", buffer.getvalue(), "china_supplier_leads.csv", "text/csv")
-    else:
-        st.info("No leads collected. Check API configuration and search results.")
-    if st.session_state.get("errors"):
-        with st.expander("Search errors"):
-            for error in dict.fromkeys(st.session_state["errors"]):
-                st.warning(error)
+        st.download_button("Download supplier leads CSV", buffer.getvalue(), "supplier_leads.csv", "text/csv")
+    if errors:
+        with st.expander(f"Skipped pages and errors ({len(errors)})"):
+            for error in errors[:100]:
+                st.write(error)
+    if not rows:
+        st.info("No matching pages found. Try more relevant starting URLs or a greater crawl depth.")
 
-st.info("Search-category labels do not prove a company is a factory. Verify business registration and capabilities independently.")
+st.warning("This is a direct crawler, not an internet-wide search engine. Provide seed websites that allow automated access. Listings are not verified manufacturers or sourcing agents.")
