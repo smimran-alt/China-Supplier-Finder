@@ -1,19 +1,26 @@
-# China Supplier Finder
+# China Supplier Finder — v2.0
 
-A product-agnostic Streamlit application that discovers public supplier leads for manufacturers, wholesalers and sourcing agents in China.
+A product-agnostic Streamlit supplier discovery dashboard. Search indexed listings of Chinese manufacturers, wholesalers and sourcing agents, with English/Chinese keywords and CSV export.
 
 ## Run locally
-
 1. Install Python 3.11+.
-2. Run `pip install -r requirements.txt`.
-3. Configure `BING_SEARCH_KEY` in your environment or Streamlit secrets **only if you have access to a working Bing-compatible API**. Microsoft's legacy Bing Search APIs have been retired; this search adapter may require replacement with a supported licensed search provider.
-4. Run `streamlit run app.py`.
-5. Enter a product, optionally its Chinese translation, and select categories and sites. Export results as CSV.
+2. `pip install -r requirements.txt`
+3. Obtain a Brave Search API key at https://api-dashboard.search.brave.com/
+4. Set environment variable `BRAVE_SEARCH_API_KEY` or place it in your local `.streamlit/secrets.toml`:
 
-## Deployment
+```toml
+BRAVE_SEARCH_API_KEY = "YOUR_KEY"
+```
 
-Deploy `app.py` with Streamlit Community Cloud and configure any API keys in app secrets, never in GitHub.
+5. `streamlit run app.py`
 
-## Limitations
+## Deploy online
+1. Visit https://share.streamlit.io/ and sign in with GitHub.
+2. Create a new app from repository `smimran-alt/China-Supplier-Finder`, branch `main`, file `app.py`.
+3. In Advanced settings / Secrets, add the TOML secret above. **Never commit API keys to GitHub.**
+4. Deploy, then open your assigned Streamlit URL.
 
-Search results are unverified leads, not proof of manufacturer status. The app does not guarantee all suppliers in China or extract verified contact information. Respect website terms and independently check company registration, factory ownership, certifications, pricing and payment details.
+## Scope and limitations
+The dashboard discovers publicly indexed **leads**, not an exhaustive supplier database. Results can include directories, intermediaries and duplicates. Categories indicate search intent, not independently verified factory status. Some marketplaces may not be indexed; access their data through permitted APIs or licensed sources. The app does not bypass login, anti-bot or robots restrictions. Check registration, factory ownership, compliance documents and payment details independently.
+
+API usage may incur costs. The first version is not yet live-tested against a real API key.
