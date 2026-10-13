@@ -1,26 +1,25 @@
-# China Supplier Finder — v2.0
+# China Supplier Finder v3 — Direct Web Crawler
 
-A product-agnostic Streamlit supplier discovery dashboard. Search indexed listings of Chinese manufacturers, wholesalers and sourcing agents, with English/Chinese keywords and CSV export.
+A Streamlit application to crawl **public, permitted websites** for any product and identify possible Chinese manufacturers, wholesalers, and sourcing agents. **No API key required.**
 
 ## Run locally
-1. Install Python 3.11+.
-2. `pip install -r requirements.txt`
-3. Obtain a Brave Search API key at https://api-dashboard.search.brave.com/
-4. Set environment variable `BRAVE_SEARCH_API_KEY` or place it in your local `.streamlit/secrets.toml`:
 
-```toml
-BRAVE_SEARCH_API_KEY = "YOUR_KEY"
+```bash
+pip install -r requirements.txt
+streamlit run app.py
 ```
 
-5. `streamlit run app.py`
+## Deploy
 
-## Deploy online
-1. Visit https://share.streamlit.io/ and sign in with GitHub.
-2. Create a new app from repository `smimran-alt/China-Supplier-Finder`, branch `main`, file `app.py`.
-3. In Advanced settings / Secrets, add the TOML secret above. **Never commit API keys to GitHub.**
-4. Deploy, then open your assigned Streamlit URL.
+At https://share.streamlit.io/ choose repository `smimran-alt/China-Supplier-Finder`, branch `main`, entrypoint `app.py`. No secrets are required.
 
-## Scope and limitations
-The dashboard discovers publicly indexed **leads**, not an exhaustive supplier database. Results can include directories, intermediaries and duplicates. Categories indicate search intent, not independently verified factory status. Some marketplaces may not be indexed; access their data through permitted APIs or licensed sources. The app does not bypass login, anti-bot or robots restrictions. Check registration, factory ownership, compliance documents and payment details independently.
+## Use
 
-API usage may incur costs. The first version is not yet live-tested against a real API key.
+1. Enter a product, e.g. `perfume`, and optionally the Chinese translation `香水`.
+2. Paste one or more **starting website URLs**, one per line, for public sites that permit crawling.
+3. Choose link depth, page limit and polite request delay.
+4. Start the crawl, review matched pages, and download CSV.
+
+## Important limitations
+
+This is a **seeded site crawler**, not an internet-wide search engine: it does not discover every supplier across China automatically. It follows links only within the supplied website hosts. It checks robots.txt, skips inaccessible websites, and does not bypass login, CAPTCHA, anti-bot systems or rate limits. Some marketplaces disallow automated crawling. A matching page is a lead, **not a verified company**. Validate registration, factory status, quality and contact details independently. The application may require changes to support JavaScript-only websites or high-volume crawling. The application has not been tested against live supplier websites.
