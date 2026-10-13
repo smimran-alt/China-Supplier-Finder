@@ -31,22 +31,25 @@ def clean(value):
 
 def api_key():
     try:
-        return os.getenv("BING_SEARCH_KEY") or st.secrets.get("BING_SEARCH_KEY", "")
+        return os.getenv("BRAVE_SEARCH_API_KEY") or st.secrets.get("BRAVE_SEARCH_API_KEY", "")
     except (FileNotFoundError, KeyError):
-        return os.getenv("BING_SEARCH_KEY", "")
+        return os.getenv("BRAVE_SEARCH_API_KEY", "")
 
 def search(query, limit):
     key = api_key()
     if not key:
-        raise RuntimeError("Search API not configured. See README; Bing legacy API may be retired.")
+        raise RuntimeError("BRAVE_SEARCH_API_KEY is missing. Configure it in Streamlit secrets.")
     response = requests.get(
-        "https://api.bing.microsoft.com/v7.0/search",
-        headers={"Ocp-Apim-Subscription-Key": key},
-        params={"q": query, "count": min(limit, 50), "mkt": "en-US"},
+        "https://api.search.brave.com/res/v1/web/search",
+        headers={"X-Subscription-Token": key, "Accept": "application/json"},
+        params={"q": query, "count": min(limit, 20)},
         timeout=25,
     )
     response.raise_for_status()
-    return response.json().get("webPages", {}).get("value", [])
+    return [
+        {"url": item.get("url"), "name": item.get("title"), "snippet": item.get("description")}
+        for item in response.json().get("web", {}).get("results", [])
+    ]
 
 def collect(product, chinese, categories, sites, limit):
     rows, seen, errors = [], set(), []
@@ -90,7 +93,7 @@ with st.form("supplier_search"):
     chinese = b.text_input("Chinese translation (optional)", "香水")
     categories = st.multiselect("Business types", list(CATEGORIES), default=list(CATEGORIES))
     sites = st.multiselect("Sources", list(SITES), default=list(SITES))
-    limit = st.slider("Results per query", 5, 30, 10)
+    limit = st.slider("Results per query", 5, 20, 10)
     submitted = st.form_submit_button("Find suppliers", type="primary")
 
 if submitted:
